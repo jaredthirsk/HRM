@@ -6,9 +6,16 @@ import torch.nn.functional as F
 
 try:
     from flash_attn_interface import flash_attn_func  # type: ignore[import]
+    HAS_FLASH_ATTN = True
 except ImportError:
-    # Fallback to FlashAttention 2
-    from flash_attn import flash_attn_func  # type: ignore[import]
+    try:
+        # Fallback to FlashAttention 2
+        from flash_attn import flash_attn_func  # type: ignore[import]
+        HAS_FLASH_ATTN = True
+    except ImportError:
+        # No FlashAttention available, use standard attention
+        HAS_FLASH_ATTN = False
+        flash_attn_func = None
 
 from models.common import trunc_normal_init_
 
@@ -38,6 +45,32 @@ def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, si
     k_embed = (k * cos.unsqueeze(-2)) + (rotate_half(k) * sin.unsqueeze(-2))
 
     return q_embed.to(orig_dtype), k_embed.to(orig_dtype)
+
+
+def standard_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, causal: bool = False):
+    """Fallback standard attention implementation when FlashAttention is not available."""
+    # query, key, value: [batch_size, seq_len, num_heads, head_dim]
+    batch_size, seq_len, num_heads, head_dim = query.shape
+    
+    # Transpose to [batch_size, num_heads, seq_len, head_dim] for attention computation
+    query = query.transpose(1, 2)  # [batch_size, num_heads, seq_len, head_dim]
+    key = key.transpose(1, 2)
+    value = value.transpose(1, 2)
+    
+    # Compute attention scores
+    scores = torch.matmul(query, key.transpose(-2, -1)) / (head_dim ** 0.5)
+    
+    if causal:
+        # Apply causal mask
+        mask = torch.triu(torch.ones(seq_len, seq_len, device=query.device, dtype=torch.bool), diagonal=1)
+        scores.masked_fill_(mask, float('-inf'))
+    
+    # Apply softmax and compute attention output
+    attn_weights = F.softmax(scores, dim=-1)
+    attn_output = torch.matmul(attn_weights, value)
+    
+    # Transpose back to [batch_size, seq_len, num_heads, head_dim]
+    return attn_output.transpose(1, 2)
 
 
 class CastedLinear(nn.Module):
@@ -126,13 +159,20 @@ class Attention(nn.Module):
             cos, sin = cos_sin
             query, key = apply_rotary_pos_emb(query, key, cos, sin)
 
-        # flash attn
-        attn_output = flash_attn_func(q=query, k=key, v=value, causal=self.causal)
-        if isinstance(attn_output, tuple):  # fa2 and fa3 compatibility
-            attn_output = attn_output[0]
-
-        # attn_output: [batch_size, num_heads, seq_len, head_dim]
-        attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
+        # attention computation
+        if HAS_FLASH_ATTN:
+            # Use FlashAttention if available
+            attn_output = flash_attn_func(q=query, k=key, v=value, causal=self.causal)
+            if isinstance(attn_output, tuple):  # fa2 and fa3 compatibility
+                attn_output = attn_output[0]
+            # attn_output: [batch_size, num_heads, seq_len, head_dim]
+            attn_output = attn_output.view(batch_size, seq_len, self.output_size)  # type: ignore
+        else:
+            # Use standard attention fallback
+            attn_output = standard_attention(query, key, value, causal=self.causal)
+            # attn_output: [batch_size, seq_len, num_heads, head_dim]
+            # Use contiguous() to fix stride issues before view
+            attn_output = attn_output.contiguous().view(batch_size, seq_len, self.output_size)
         return self.o_proj(attn_output)
 
 

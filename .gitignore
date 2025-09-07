@@ -1,11 +1,22 @@
-# WandB
+# Training artifacts
 /wandb/
-# checkpoints
 /checkpoints/
-# cache
 /cache/
-# data
 /data/
+
+# Training logs and temporary files
+*.log
+training.log
+dataset_build.log
+nohup.out
+
+# PyTorch model files
+*.pt
+*.pth
+*.ckpt
+
+# Our workaround files (keep adam_atan2.py but ignore any temp files)
+*.tmp
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
