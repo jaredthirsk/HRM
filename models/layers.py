@@ -52,22 +52,19 @@ def standard_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tens
     # query, key, value: [batch_size, seq_len, num_heads, head_dim]
     batch_size, seq_len, num_heads, head_dim = query.shape
     
-    # Transpose to [batch_size, num_heads, seq_len, head_dim] for attention computation
+    # Use scaled_dot_product_attention which is optimized in PyTorch 2.0+
+    # This is much faster than manual implementation
     query = query.transpose(1, 2)  # [batch_size, num_heads, seq_len, head_dim]
     key = key.transpose(1, 2)
     value = value.transpose(1, 2)
     
-    # Compute attention scores
-    scores = torch.matmul(query, key.transpose(-2, -1)) / (head_dim ** 0.5)
-    
-    if causal:
-        # Apply causal mask
-        mask = torch.triu(torch.ones(seq_len, seq_len, device=query.device, dtype=torch.bool), diagonal=1)
-        scores.masked_fill_(mask, float('-inf'))
-    
-    # Apply softmax and compute attention output
-    attn_weights = F.softmax(scores, dim=-1)
-    attn_output = torch.matmul(attn_weights, value)
+    # Use PyTorch's optimized implementation
+    attn_output = F.scaled_dot_product_attention(
+        query, key, value,
+        attn_mask=None,
+        dropout_p=0.0,
+        is_causal=causal
+    )
     
     # Transpose back to [batch_size, seq_len, num_heads, head_dim]
     return attn_output.transpose(1, 2)
