@@ -77,11 +77,14 @@ HRM (Hierarchical Reasoning Model) is a PyTorch research project implementing a 
 ### Dependencies
 Several dependencies may require workarounds:
 
-1. **adam-atan2 Package**: May fail to install due to setuptools compatibility
-   - **Solution**: Use the provided `adam_atan2.py` workaround file
-   - This creates a compatible Adam optimizer wrapper
+1. **adam-atan2 Package**: Original package fails due to setuptools compatibility
+   - **✅ NEW SOLUTION**: Use `adam-atan2-pytorch` package instead
+   - Install with: `pip install adam-atan2-pytorch`
+   - Update code: `from adam_atan2_pytorch import AdamAtan2` (capital A instead of AT)
+   - **Fallback**: Use the provided `adam_atan2.py` workaround file
 
-2. **FlashAttention**: May not be installed or compatible
+2. **FlashAttention**: May not be installed or compatible (especially RTX 3050/older GPUs)
+   - **Attempted**: `pip install flash_attn --no-build-isolation` (fails on CUDA version mismatch)
    - **Solution**: `models/layers.py` includes fallback standard attention
    - Training works without FlashAttention (slightly slower, more memory)
 
