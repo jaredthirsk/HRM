@@ -44,14 +44,23 @@ def load_checkpoint(checkpoint_path: str) -> torch.nn.Module:
             }
         }
     
-    # Determine if 4x4 or 9x9 based on checkpoint
+    # Determine puzzle size based on checkpoint
     is_4x4 = '4x4' in checkpoint_path or config['arch'].get('hidden_size', 512) == 256
+    is_6x6 = '6x6' in checkpoint_path or config['arch'].get('hidden_size', 512) == 384
+    
+    # Set vocab and seq_len based on puzzle size
+    if is_4x4:
+        vocab_size, seq_len = 6, 16  # PAD + blank + 1-4
+    elif is_6x6:
+        vocab_size, seq_len = 8, 36  # PAD + blank + 1-6
+    else:
+        vocab_size, seq_len = 11, 81  # PAD + blank + 1-9
     
     model_config = {
         **config['arch'],
         'batch_size': 1,
-        'vocab_size': 6 if is_4x4 else 11,  # 4x4: PAD + blank + 1-4, 9x9: PAD + blank + 1-9
-        'seq_len': 16 if is_4x4 else 81,
+        'vocab_size': vocab_size,
+        'seq_len': seq_len,
         'num_puzzle_identifiers': 1,
         'causal': False
     }
@@ -65,7 +74,13 @@ def load_checkpoint(checkpoint_path: str) -> torch.nn.Module:
     model.load_state_dict(state_dict, strict=False)
     model.eval()
     
-    return model, is_4x4
+    # Return puzzle type
+    if is_4x4:
+        return model, '4x4'
+    elif is_6x6:
+        return model, '6x6'
+    else:
+        return model, '9x9'
 
 
 def load_test_puzzles(data_path: str, num_puzzles: int = 5):
@@ -81,18 +96,18 @@ def load_test_puzzles(data_path: str, num_puzzles: int = 5):
     return inputs[indices], labels[indices]
 
 
-def puzzle_to_grid(puzzle: np.ndarray, is_4x4: bool = True):
+def puzzle_to_grid(puzzle: np.ndarray, puzzle_type: str = '4x4'):
     """Convert flat puzzle array to 2D grid."""
-    size = 4 if is_4x4 else 9
+    size = {'4x4': 4, '6x6': 6, '9x9': 9}[puzzle_type]
     # Subtract 1 to convert from vocab (PAD=0, blank=1, digits=2+) back to standard (blank=0, digits=1+)
     grid = (puzzle - 1).reshape(size, size)
     grid[grid < 0] = 0  # PAD becomes blank
     return grid
 
 
-def visualize_puzzle_solution(model: torch.nn.Module, puzzle: np.ndarray, solution: np.ndarray, is_4x4: bool = True):
+def visualize_puzzle_solution(model: torch.nn.Module, puzzle: np.ndarray, solution: np.ndarray, puzzle_type: str = '4x4'):
     """Visualize how the model solves a single puzzle."""
-    size = 4 if is_4x4 else 9
+    size = {'4x4': 4, '6x6': 6, '9x9': 9}[puzzle_type]
     
     # Prepare batch
     with torch.no_grad():
@@ -127,27 +142,28 @@ def visualize_puzzle_solution(model: torch.nn.Module, puzzle: np.ndarray, soluti
                 break
     
     # Create visualization
-    fig = plt.figure(figsize=(16, 4) if is_4x4 else (20, 5))
+    fig_width = {'4x4': 16, '6x6': 18, '9x9': 20}[puzzle_type]
+    fig = plt.figure(figsize=(fig_width, 4 if puzzle_type == '4x4' else 5))
     
     # Original puzzle
     ax1 = plt.subplot(1, steps_taken + 2, 1)
-    plot_sudoku_grid(puzzle_to_grid(puzzle, is_4x4), puzzle_to_grid(puzzle, is_4x4), 
-                     title="Input Puzzle", is_4x4=is_4x4, ax=ax1)
+    plot_sudoku_grid(puzzle_to_grid(puzzle, puzzle_type), puzzle_to_grid(puzzle, puzzle_type), 
+                     title="Input Puzzle", puzzle_type=puzzle_type, ax=ax1)
     
     # Predictions at each step
     for step in range(steps_taken):
         ax = plt.subplot(1, steps_taken + 2, step + 2)
-        pred_grid = puzzle_to_grid(all_predictions[step], is_4x4)
+        pred_grid = puzzle_to_grid(all_predictions[step], puzzle_type)
         conf_grid = all_confidences[step].reshape(size, size)
-        plot_sudoku_grid(puzzle_to_grid(puzzle, is_4x4), pred_grid, 
+        plot_sudoku_grid(puzzle_to_grid(puzzle, puzzle_type), pred_grid, 
                         confidence=conf_grid, 
                         title=f"Step {step+1}", 
-                        is_4x4=is_4x4, ax=ax)
+                        puzzle_type=puzzle_type, ax=ax)
     
     # Final/correct solution
     ax_last = plt.subplot(1, steps_taken + 2, steps_taken + 2)
-    plot_sudoku_grid(puzzle_to_grid(solution, is_4x4), puzzle_to_grid(solution, is_4x4), 
-                    title="Correct Solution", is_4x4=is_4x4, ax=ax_last)
+    plot_sudoku_grid(puzzle_to_grid(solution, puzzle_type), puzzle_to_grid(solution, puzzle_type), 
+                    title="Correct Solution", puzzle_type=puzzle_type, ax=ax_last)
     
     plt.suptitle(f"Model Solving Process ({steps_taken} steps)", fontsize=14, fontweight='bold')
     plt.tight_layout()
@@ -157,13 +173,13 @@ def visualize_puzzle_solution(model: torch.nn.Module, puzzle: np.ndarray, soluti
 
 def plot_sudoku_grid(original: np.ndarray, predicted: np.ndarray, 
                      confidence: Optional[np.ndarray] = None,
-                     title: str = "", is_4x4: bool = True, ax=None):
+                     title: str = "", puzzle_type: str = '4x4', ax=None):
     """Plot a single Sudoku grid with original and predicted values."""
     if ax is None:
         ax = plt.gca()
     
-    size = 4 if is_4x4 else 9
-    box_size = 2 if is_4x4 else 3
+    size = {'4x4': 4, '6x6': 6, '9x9': 9}[puzzle_type]
+    box_size = {'4x4': 2, '6x6': 3, '9x9': 3}[puzzle_type]  # 6x6 uses 3x2 boxes
     
     # Clear axis
     ax.clear()
@@ -223,7 +239,7 @@ def main():
     
     # Load model
     print(f"Loading model from {args.checkpoint}...")
-    model, is_4x4 = load_checkpoint(args.checkpoint)
+    model, puzzle_type = load_checkpoint(args.checkpoint)
     
     # Load test puzzles
     print(f"Loading test puzzles from {args.data_path}...")
@@ -233,7 +249,7 @@ def main():
     for idx, (puzzle, solution) in enumerate(zip(puzzles, solutions)):
         print(f"\nVisualizing puzzle {idx + 1}/{len(puzzles)}...")
         
-        fig, steps = visualize_puzzle_solution(model, puzzle, solution, is_4x4)
+        fig, steps = visualize_puzzle_solution(model, puzzle, solution, puzzle_type)
         
         # Check accuracy
         with torch.no_grad():
