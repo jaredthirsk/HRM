@@ -412,11 +412,23 @@ def launch(hydra_config: DictConfig):
 
     # Train state
     train_state = init_train_state(config, train_metadata, world_size=WORLD_SIZE)
+    
+    # Load checkpoint if provided
+    resume_checkpoint = getattr(hydra_config, 'checkpoint', None)
+    if resume_checkpoint:
+        print(f"[Rank {RANK}]: Loading checkpoint from {resume_checkpoint}")
+        checkpoint_data = torch.load(resume_checkpoint, map_location="cuda")
+        train_state.model.load_state_dict(checkpoint_data, strict=False)
+        # Extract step number from filename if it follows the pattern step_XXXX
+        checkpoint_name = os.path.basename(resume_checkpoint)
+        if checkpoint_name.startswith("step_"):
+            train_state.step = int(checkpoint_name.split("_")[1])
+            print(f"[Rank {RANK}]: Resuming from step {train_state.step}")
 
     # Progress bar and logger
     progress_bar = None
     if RANK == 0:
-        progress_bar = tqdm.tqdm(total=train_state.total_steps)
+        progress_bar = tqdm.tqdm(total=train_state.total_steps, initial=train_state.step)
 
         wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
         wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
