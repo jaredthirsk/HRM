@@ -413,7 +413,8 @@ def launch(hydra_config: DictConfig):
     # Train state
     train_state = init_train_state(config, train_metadata, world_size=WORLD_SIZE)
     
-    # Load checkpoint if provided
+    # Load checkpoint if provided and calculate starting iteration
+    start_iter = 0
     resume_checkpoint = getattr(hydra_config, 'checkpoint', None)
     if resume_checkpoint:
         print(f"[Rank {RANK}]: Loading checkpoint from {resume_checkpoint}")
@@ -423,7 +424,10 @@ def launch(hydra_config: DictConfig):
         checkpoint_name = os.path.basename(resume_checkpoint)
         if checkpoint_name.startswith("step_"):
             train_state.step = int(checkpoint_name.split("_")[1])
-            print(f"[Rank {RANK}]: Resuming from step {train_state.step}")
+            # Calculate which iteration we should start from based on steps completed
+            steps_per_iter = train_state.total_steps // total_iters
+            start_iter = train_state.step // steps_per_iter
+            print(f"[Rank {RANK}]: Resuming from step {train_state.step}, starting at iteration {start_iter}/{total_iters}")
 
     # Progress bar and logger
     progress_bar = None
@@ -434,8 +438,8 @@ def launch(hydra_config: DictConfig):
         wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
         save_code_and_config(config)
 
-    # Training Loop
-    for _iter_id in range(total_iters):
+    # Training Loop - start from calculated iteration
+    for _iter_id in range(start_iter, total_iters):
         print (f"[Rank {RANK}, World Size {WORLD_SIZE}]: Epoch {_iter_id * train_epochs_per_iter}")
 
         ############ Train Iter
